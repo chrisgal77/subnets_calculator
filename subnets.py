@@ -1,12 +1,16 @@
 import argparse
 import os
 
-hosts = { i : 2**(32 - i) - 2  for i in range(16, 31) }
 
-mask = { i : 2**(32 - i) for i in range(16, 31) }
+def init(intervals):
+    hosts = { i : 2**(32 - i) - 2  for i in range(*intervals) }
 
-last_available = 0    
-host_intervals = []
+    masks = { i : 2**(32 - i) for i in range(*intervals)}
+
+    last_available = 0    
+    host_intervals = []
+    
+    return hosts, masks, last_available, host_intervals
     
 def get_args():
     parser = argparse.ArgumentParser(description='IP creator', formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -16,12 +20,12 @@ def get_args():
                         help='The network prefix. ex. 192.168.0.0',
                         dest='prefix',
                         default='192.168.0.0')
-    parser.add_argument('-n',
-                        '--noctet',
+    parser.add_argument('-m',
+                        '--mask',
                         type=int,
-                        help='Number of octets to fill, 1 or 2',
-                        dest='n_octets',
-                        default=1)
+                        help='Mask of subnet',
+                        dest='mask_dec',
+                        default=24)
     parser.add_argument('-ho',
                         '--hosts',
                         type=str,
@@ -41,50 +45,34 @@ def get_args():
                         default=0)
     return parser.parse_args()
     
-def take_input(input_, sort):
-    rv = input_.replace('\n', '').split(sep=',')
+def take_input(input_, sort, sep=','):
+    rv = input_.replace('\n', '').split(sep=sep)
     if sort:
         return sorted(list(map(lambda x: int(x), rv)), reverse=True)
     return list(map(lambda x: int(x), rv))
 
-def find_closest(n_hosts):
-    global hosts
-    closest = 24
-    for key, value in hosts.items():
-        if value - n_hosts >= 0 and value - n_hosts < hosts[closest]:
-            closest = key
-    return closest 
+def find_mask(host):
+    return 32 - (host).bit_length()
 
-def take_and_divide(n_hosts):
-    global last_available
-    closest = find_closest(n_hosts)
-    host_intervals.append([last_available + 1, last_available + 1 + hosts[closest], closest])
-    last_available +=  mask[closest]
-    
-def create_ip_addresses(prefix, filename, hosts, n_octets):
-    global host_intervals
-    if n_octets == 2:
-        prefix = prefix.split('.')[:2]
-        with open(os.path.join(os.path.dirname(__file__), filename), 'w') as file:
-            file.write('First address is a default-gateway and the last is a broadcast address\n')
-            for (left, right, mask), host in zip(host_intervals, hosts):
-                left, right = to_dotted_decimal(left), to_dotted_decimal(right)
-                file.write(f'hosts: {host} -> {prefix[0]}.{prefix[1]}.{left} ... {prefix[0]}.{prefix[1]}.{right} mask: /{mask} ')     
-                mask = mask_repr(mask)
-                file.write(f'{mask}\n')
-                
-    elif n_octets == 1:
-        prefix = prefix.split('.')[:3]
-        with open(os.path.join(os.path.dirname(__file__), filename), 'w') as file:
-            file.write('First address is a default-gateway and the last is a broadcast address\n')
-            for (left, right, mask), host in zip(host_intervals, hosts):
-                file.write(f'hosts: {host} -> {prefix[0]}.{prefix[1]}.{prefix[2]}.{left} ... {prefix[0]}.{prefix[1]}.{prefix[2]}.{right} mask: /{mask} ')  
-                mask = mask_repr(mask)
-                file.write(f'{mask}\n')
+def prepare_prefix(prefix):
+    prefix = take_input(prefix, False, sep='.')
+    rv = 0
+    for element in prefix:
+        rv <<= 8
+        rv |= element
+    return rv
 
-def to_dotted_decimal(number, length=3):
+def address_to_string(address):
+    result = ''
+    for i in reversed(range(4)):
+        result += str((address >> (8 * i)) & (2**8 - 1))
+        if i != 0:
+            result += ('.')
+    return result
+
+def to_dotted_dec(number):
     output = ''
-    for i in reversed(range(length)):
+    for i in reversed(range(4)):
         output += str((number >> (8 * i)) & 2**8 - 1)
         if i != 0:
             output += '.'
@@ -92,22 +80,33 @@ def to_dotted_decimal(number, length=3):
 
 def mask_repr(mask):
     mask = (2 ** 32 - 1) & (~(2**(32-mask) - 1))
-    return to_dotted_decimal(mask, 4)
+    return to_dotted_dec(mask)
 
-def process(prefix, n_octets, hosts, filename, sort):
-    hosts = take_input(hosts, sort)
-    if n_octets == 1:
-        assert sum(hosts) < 254 and sum(hosts) > 0, 'Coś za dużo tych hostów'
-    for input_ in hosts:
-        take_and_divide(input_)
-    create_ip_addresses(prefix, filename, hosts, n_octets)
+def process(prefix, mask_dec, n_hosts, filename, sort):
+    hosts, masks, last_available, host_intervals = init((8,31))
+    n_hosts = take_input(n_hosts, sort)
+    prefix = prepare_prefix(prefix)
+    max_addresses = 2 ** (32 - mask_dec)
+    with open(filename, 'w') as file:
+        file.write('First address is commonly used for default gateway and the last is broadcast\n')
+        for host in n_hosts:
+            mask_key = find_mask(host)
+            if max_addresses - masks[mask_key] < 0:
+                raise ValueError('Too many hosts for the given mask')
 
+            addresses = (address_to_string(prefix + 1), address_to_string(prefix + masks[mask_key] - 1))
+            prefix += masks[mask_key]
+            max_addresses -= masks[mask_key]
+            new_mask_dec = mask_repr(mask_key)
+            file.write(f'{host}: {addresses[0]} ... {addresses[1]} mask: /{mask_key} | {new_mask_dec}\n')
+    
+    
 if __name__ == "__main__":
     args = get_args()
     process(
         prefix=args.prefix,
-        n_octets=args.n_octets,
-        hosts=args.hosts,
+        mask_dec=args.mask_dec,
+        n_hosts=args.hosts,
         filename=args.filename,
         sort=args.sort
     )

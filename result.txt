@@ -1,0 +1,3 @@
+First address is commonly used for default gateway and the last is broadcast
+1510: 192.168.12.1 ... 192.168.19.255 mask: /21 | 255.255.248.0
+244: 192.168.20.1 ... 192.168.20.255 mask: /24 | 255.255.255.0
